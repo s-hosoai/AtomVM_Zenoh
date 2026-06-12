@@ -45,6 +45,7 @@ set(ELIXIR_MODULES
     IO
     List
     Map
+    M5
     MapSet
     Module
     Keyword

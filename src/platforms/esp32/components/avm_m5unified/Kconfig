@@ -1,0 +1,9 @@
+menu "AtomVM M5Unified Component"
+
+config AVM_ENABLE_M5UNIFIED_NIFS
+    bool "Enable M5Unified NIFs"
+    default y
+    help
+        Enable AtomVM NIFs for M5Unified (m5:begin/0, m5:display_print/1, etc.)
+
+endmenu
