@@ -1,0 +1,9 @@
+name = "blink"
+version = "1.0.0"
+
+description = "LED blink example for AtomVM on ESP32"
+licences = ["Apache-2.0"]
+
+[dependencies]
+gleam_stdlib = ">= 0.34.0 and < 2.0.0"
+gleam_avm = { path = "../../../libs/gleam_avm" }
