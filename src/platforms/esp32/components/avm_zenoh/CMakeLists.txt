@@ -1,4 +1,7 @@
-set(ZENOH_PICO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/zenoh-pico")
+# CMAKE_SOURCE_DIR is the ESP-IDF project root (src/platforms/esp32/).
+# CMAKE_CURRENT_SOURCE_DIR may resolve through the build tree in the requirements
+# phase, so we anchor from the project root instead.
+set(ZENOH_PICO_DIR "${CMAKE_SOURCE_DIR}/third_party/zenoh-pico")
 
 if (NOT EXISTS "${ZENOH_PICO_DIR}/include/zenoh-pico.h")
     message(FATAL_ERROR "zenoh-pico not found at ${ZENOH_PICO_DIR}. "
