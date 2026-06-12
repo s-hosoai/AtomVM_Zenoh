@@ -30,6 +30,10 @@ src/platforms/esp32/dependencies.lock
 !src/platforms/esp32/components/libatomvm/**
 !src/platforms/esp32/components/avm_m5unified/
 !src/platforms/esp32/components/avm_m5unified/**
+!src/platforms/esp32/components/avm_zenoh/
+!src/platforms/esp32/components/avm_zenoh/**
+!src/platforms/esp32/third_party/
+!src/platforms/esp32/third_party/zenoh-pico
 .idea/**
 .vscode/**
 .DS_Store

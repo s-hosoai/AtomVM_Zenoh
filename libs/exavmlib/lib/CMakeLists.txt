@@ -47,6 +47,7 @@ set(ELIXIR_MODULES
     Map
     M5
     MapSet
+    Zenoh
     Module
     Keyword
     Supervisor

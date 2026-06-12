@@ -1,0 +1,11 @@
+menu "AtomVM Zenoh Component"
+
+config AVM_ENABLE_ZENOH_NIFS
+    bool "Enable Zenoh-pico NIFs"
+    default y
+    help
+        Enable Zenoh pub/sub NIFs for AtomVM.
+        Requires zenoh-pico to be present in the components directory.
+        WiFi must be connected before calling zenoh:open/1.
+
+endmenu

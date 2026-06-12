@@ -150,6 +150,55 @@ esptool.py --chip esp32s3 --port /dev/ttyACM0 \
 
 ---
 
+## Zenoh NIF
+
+### セットアップ（初回のみ）
+
+zenoh-pico はサブモジュールとして `src/platforms/esp32/third_party/zenoh-pico/` に含まれる。
+
+```bash
+git submodule update --init --recursive
+```
+
+### 実装場所
+
+- **NIF 実装**: `src/platforms/esp32/components/avm_zenoh/zenoh_nif.c`
+- **Gleam バインディング**: `libs/gleam_avm/src/gleam_avm/zenoh.gleam`
+- **Elixir ラッパー**: `libs/exavmlib/lib/Zenoh.ex`
+- **Elixir サンプル**: `examples/elixir/esp32/ZenohPub.ex`, `ZenohSub.ex`
+
+### 利用可能な NIF
+
+| Erlang NIF | 説明 |
+|---|---|
+| `zenoh:open/1` | セッション開始 `open(<<"tcp/192.168.1.1:7447">>)` → `{ok, Session}` |
+| `zenoh:close/1` | セッション終了 |
+| `zenoh:put/3` | `put(Session, <<"key/expr">>, <<"payload">>)` → `ok` |
+| `zenoh:declare_publisher/2` | `declare_publisher(Session, <<"key/expr">>)` → `{ok, Pub}` |
+| `zenoh:publisher_put/2` | `publisher_put(Pub, <<"payload">>)` → `ok` |
+| `zenoh:undeclare_publisher/1` | パブリッシャー解放 |
+| `zenoh:declare_subscriber/2` | `declare_subscriber(Session, <<"key/**">>)` → `{ok, Sub}` |
+| `zenoh:subscriber_recv/2` | `subscriber_recv(Sub, TimeoutMs)` → `{ok, KeyExpr, Payload}` \| `timeout` |
+| `zenoh:undeclare_subscriber/1` | サブスクライバー解放 |
+
+### 使用条件
+
+- **WiFi 接続必須**: `zenoh:open/1` を呼ぶ前に AtomVM の `:network.start_link/1` でWiFi接続すること
+- **Zenoh ルーター**: PC 側で `zenohd` を起動しておくこと
+  ```bash
+  docker run --network host eclipse/zenoh
+  ```
+
+### Elixir でのサンプル使用方法
+
+```bash
+# SSID・パスワード・ルーターアドレスを ZenohPub.ex / ZenohSub.ex に記入
+make ZenohPub
+esptool.py --chip esp32s3 --port /dev/ttyACM0 write_flash 0x250000 build/examples/elixir/esp32/ZenohPub.avm
+```
+
+---
+
 ## 既知の注意点
 
 ### I2C ドライバ競合
