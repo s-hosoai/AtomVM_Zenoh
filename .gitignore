@@ -39,3 +39,6 @@ src/platforms/esp32/dependencies.lock
 .DS_Store
 .cache
 .clang-tidy
+
+# Elixir example credentials (copy from *.example and fill in)
+examples/elixir/esp32/EspConfig.ex

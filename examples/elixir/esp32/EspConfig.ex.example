@@ -1,0 +1,8 @@
+defmodule EspConfig do
+  # Copy this file to EspConfig.ex and fill in your values.
+  # EspConfig.ex is listed in .gitignore and will not be committed.
+
+  def wifi_ssid, do: "YOUR_SSID"
+  def wifi_pass, do: "YOUR_PASSWORD"
+  def zenoh_router, do: "tcp/192.168.1.100:7447"
+end

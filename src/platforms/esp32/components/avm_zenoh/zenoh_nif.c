@@ -116,31 +116,37 @@ static void zenoh_nif_init(GlobalContext *global)
 static void zenoh_sub_callback(z_loaned_sample_t *sample, void *arg)
 {
     QueueHandle_t queue = (QueueHandle_t) arg;
-    ZenohMessage msg;
-    memset(&msg, 0, sizeof(msg));
 
-    // Extract keyexpr string
+    // Allocate on heap: ZenohMessage is ~4KB, too large for the read task stack.
+    ZenohMessage *msg = malloc(sizeof(ZenohMessage));
+    if (msg == NULL) {
+        return;
+    }
+    memset(msg, 0, sizeof(ZenohMessage));
+
+    // Extract keyexpr — same pattern as official zenoh-pico examples
     z_view_string_t keystr;
     z_keyexpr_as_view_string(z_sample_keyexpr(sample), &keystr);
-    const z_loaned_string_t *ke_loaned = z_view_string_loan(&keystr);
-    size_t ke_len = z_string_len(ke_loaned);
+    size_t ke_len = z_string_len(z_loan(keystr));
     if (ke_len >= ZENOH_KEYEXPR_MAX) {
         ke_len = ZENOH_KEYEXPR_MAX - 1;
     }
-    memcpy(msg.keyexpr, z_string_data(ke_loaned), ke_len);
-    msg.keyexpr_len = ke_len;
+    memcpy(msg->keyexpr, z_string_data(z_loan(keystr)), ke_len);
+    msg->keyexpr_len = ke_len;
 
-    // Extract payload bytes
-    const z_loaned_bytes_t *payload_bytes = z_sample_payload(sample);
-    z_bytes_reader_t reader = z_bytes_get_reader(payload_bytes);
-    size_t payload_len = z_bytes_reader_remaining(&reader);
+    // Extract payload via z_bytes_to_string (same pattern as official examples)
+    z_owned_string_t payload_str;
+    z_bytes_to_string(z_sample_payload(sample), &payload_str);
+    size_t payload_len = z_string_len(z_loan(payload_str));
     if (payload_len > ZENOH_PAYLOAD_MAX) {
         payload_len = ZENOH_PAYLOAD_MAX;
     }
-    z_bytes_reader_read(&reader, msg.payload, payload_len);
-    msg.payload_len = payload_len;
+    memcpy(msg->payload, z_string_data(z_loan(payload_str)), payload_len);
+    msg->payload_len = payload_len;
+    z_drop(z_move(payload_str));
 
-    xQueueSend(queue, &msg, 0);
+    xQueueSend(queue, msg, 0);
+    free(msg);
 }
 
 // zenoh:open/1 :: binary() -> {ok, session()} | {error, atom()}
@@ -445,21 +451,28 @@ static term nif_zenoh_subscriber_recv(Context *ctx, int argc, term argv[])
     int32_t timeout_ms = term_to_int32(argv[1]);
     TickType_t ticks = (timeout_ms < 0) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
 
-    ZenohMessage msg;
-    if (xQueueReceive(res->queue, &msg, ticks) != pdTRUE) {
+    // ZenohMessage is ~4KB — allocate on heap to avoid overflowing AtomVM's scheduler stack.
+    ZenohMessage *msg = malloc(sizeof(ZenohMessage));
+    if (IS_NULL_PTR(msg)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    if (xQueueReceive(res->queue, msg, ticks) != pdTRUE) {
+        free(msg);
         return globalcontext_make_atom(ctx->global, ATOM_STR("\x7", "timeout"));
     }
 
     size_t heap_needed = TUPLE_SIZE(3)
-        + term_binary_heap_size(msg.keyexpr_len)
-        + term_binary_heap_size(msg.payload_len);
+        + term_binary_heap_size(msg->keyexpr_len)
+        + term_binary_heap_size(msg->payload_len);
 
     if (UNLIKELY(memory_ensure_free(ctx, heap_needed) != MEMORY_GC_OK)) {
+        free(msg);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
-    term ke_bin = term_from_literal_binary(msg.keyexpr, msg.keyexpr_len, &ctx->heap, ctx->global);
-    term payload_bin = term_from_literal_binary(msg.payload, msg.payload_len, &ctx->heap, ctx->global);
+    term ke_bin = term_from_literal_binary(msg->keyexpr, msg->keyexpr_len, &ctx->heap, ctx->global);
+    term payload_bin = term_from_literal_binary(msg->payload, msg->payload_len, &ctx->heap, ctx->global);
+    free(msg);
 
     term result = term_alloc_tuple(3, &ctx->heap);
     term_put_tuple_element(result, 0, OK_ATOM);

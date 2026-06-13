@@ -24,9 +24,52 @@ include(BuildElixir)
 
 pack_runnable(Blink Blink estdlib eavmlib exavmlib avm_esp32)
 pack_runnable(M5Blink M5Blink estdlib eavmlib exavmlib avm_esp32)
-pack_runnable(ZenohPub ZenohPub estdlib eavmlib exavmlib avm_esp32)
-pack_runnable(ZenohSub ZenohSub estdlib eavmlib exavmlib avm_esp32)
 pack_runnable(Ledc_x4 Ledc_x4 estdlib eavmlib exavmlib avm_esp32)
 if(NOT (AVM_DISABLE_FP))
     pack_runnable(SHT31 SHT31 estdlib eavmlib exavmlib avm_esp32)
 endif()
+
+# Zenoh examples share EspConfig (WiFi/Zenoh credentials).
+# EspConfig.ex is gitignored — copy from EspConfig.ex.example and fill in values,
+# then run: idf.py reconfigure && make ZenohPub ZenohSub
+find_package(Elixir REQUIRED)
+
+set(_zenoh_archives
+    ${CMAKE_BINARY_DIR}/libs/estdlib/src/estdlib.avm
+    ${CMAKE_BINARY_DIR}/libs/eavmlib/src/eavmlib.avm
+    ${CMAKE_BINARY_DIR}/libs/exavmlib/lib/exavmlib.avm
+    ${CMAKE_BINARY_DIR}/libs/avm_esp32/src/avm_esp32.avm
+)
+
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/Elixir.EspConfig.beam
+    COMMAND elixirc -o ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/EspConfig.ex
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/EspConfig.ex
+    COMMENT "Compiling EspConfig.ex"
+    VERBATIM
+)
+
+foreach(_zenoh_mod ZenohPub ZenohSub)
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/Elixir.${_zenoh_mod}.beam
+        COMMAND elixirc -o ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/${_zenoh_mod}.ex
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${_zenoh_mod}.ex
+        COMMENT "Compiling ${_zenoh_mod}.ex"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT ${_zenoh_mod}.avm
+        DEPENDS
+            ${CMAKE_CURRENT_BINARY_DIR}/Elixir.${_zenoh_mod}.beam
+            ${CMAKE_CURRENT_BINARY_DIR}/Elixir.EspConfig.beam
+            PackBEAM estdlib eavmlib exavmlib avm_esp32
+        COMMAND ${CMAKE_BINARY_DIR}/tools/packbeam/packbeam create
+                -s Elixir.${_zenoh_mod} ${_zenoh_mod}.avm
+                ${CMAKE_CURRENT_BINARY_DIR}/Elixir.${_zenoh_mod}.beam
+                ${CMAKE_CURRENT_BINARY_DIR}/Elixir.EspConfig.beam
+                ${_zenoh_archives}
+        COMMENT "Packing ${_zenoh_mod}.avm"
+        VERBATIM
+    )
+    add_custom_target(${_zenoh_mod} ALL DEPENDS ${_zenoh_mod}.avm)
+endforeach()
