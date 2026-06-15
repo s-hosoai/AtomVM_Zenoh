@@ -1,17 +1,11 @@
 defmodule GiocciClient do
   @compile {:no_warn_undefined, [Zenoh, :network, EspConfig]}
 
-  @moduledoc """
-  Giocci client port for AtomVM (ESP32).
-
-  Supported:
-    - register_client/4
-    - exec_func/5
-
-  Not supported (use a PC Giocci client instead):
-    - save_module  — requires :code.get_object_code/1, unavailable on AtomVM
-    - exec_func_async — requires Task.Supervisor, unavailable on AtomVM
-  """
+  # Giocci client port for AtomVM (ESP32).
+  # Supported: register_client/4, exec_func/5
+  # Not supported (use a PC Giocci client):
+  #   - save_module  — requires :code.get_object_code/1, unavailable on AtomVM
+  #   - exec_func_async — requires Task.Supervisor, unavailable on AtomVM
 
   @default_timeout 5000
   @reconnect_delay_ms 5000
@@ -20,11 +14,8 @@ defmodule GiocciClient do
   # Public API
   # ---------------------------------------------------------------------------
 
-  @doc """
-  Register this client with a Giocci relay.
-
-      :ok | {:error, reason}
-  """
+  # Register this client with a Giocci relay.
+  # Returns :ok | {:error, reason}
   def register_client(session, relay_name, client_name, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     key = "giocci/register/client/" <> relay_name
@@ -36,14 +27,10 @@ defmodule GiocciClient do
     end
   end
 
-  @doc """
-  Execute a function on a Giocci engine via the relay.
-
-      mfargs: {Module, :function, [arg1, arg2, ...]}
-
-  The module must already be uploaded to the relay by a PC-side Giocci client.
-  Returns {:ok, result} | {:error, reason}.
-  """
+  # Execute a function on a Giocci engine via the relay.
+  # mfargs: {Module, :function, [arg1, arg2, ...]}
+  # Module must already be uploaded by a PC-side Giocci client.
+  # Returns {:ok, result} | {:error, reason}
   def exec_func(session, relay_name, client_name, mfargs, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
@@ -69,7 +56,7 @@ defmodule GiocciClient do
   # Demo entry point (called by AtomVM on boot)
   # ---------------------------------------------------------------------------
 
-  @doc "Boot entry point for demo. Edit relay_name / client_name as needed."
+  # Boot entry point for demo. Edit relay_name / client_name as needed.
   def start() do
     IO.puts("=== GiocciClient starting ===")
     connect_wifi()
