@@ -2,11 +2,18 @@ defmodule GiocciClient do
   @compile {:no_warn_undefined, [Zenoh, :network, EspConfig]}
 
   # Giocci client port for AtomVM (ESP32).
+  # Mirrors giocci_example (https://github.com/biyooon-ex/giocci_example).
+  #
   # Supported: register_client/4, exec_func/5
-  # Not supported (use a PC Giocci client):
-  #   - save_module  — requires :code.get_object_code/1, unavailable on AtomVM
-  #   - exec_func_async — requires Task.Supervisor, unavailable on AtomVM
+  # Not supported on AtomVM (use PC-side Giocci client instead):
+  #   - save_module     — requires :code.get_object_code/1
+  #   - exec_func_async — requires Task.Supervisor
+  #   - HeavyLoad       — requires Task.async_stream
+  #   - Measurer        — requires System.monotonic_time
+  #   - AsyncServer     — requires GenServer + exec_func_async
 
+  @relay "giocci_relay"
+  @client_name "atomvm_client"
   @default_timeout 5000
   @reconnect_delay_ms 5000
 
@@ -29,20 +36,17 @@ defmodule GiocciClient do
 
   # Execute a function on a Giocci engine via the relay.
   # mfargs: {Module, :function, [arg1, arg2, ...]}
-  # Module must already be uploaded by a PC-side Giocci client.
+  # Module must already be uploaded by a PC-side Giocci client via save_module.
   # Returns {:ok, result} | {:error, reason}
   def exec_func(session, relay_name, client_name, mfargs, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
-    # Step 1: ask relay which engine handles this request
     key1 = "giocci/inquiry_engine/client/" <> relay_name
     term1 = %{data: %{mfargs: mfargs, client_name: client_name}, measurements: %{}}
 
     with {:ok, %{data: relay_data, measurements: measurements}} <-
            zenoh_get(session, key1, term1, timeout) do
       engine_name = relay_data[:engine_name]
-
-      # Step 2: execute on the assigned engine
       key2 = "giocci/exec_func/client/" <> engine_name
       term2 = %{data: %{mfargs: mfargs, client_name: client_name}, measurements: measurements}
 
@@ -56,7 +60,6 @@ defmodule GiocciClient do
   # Demo entry point (called by AtomVM on boot)
   # ---------------------------------------------------------------------------
 
-  # Boot entry point for demo. Edit relay_name / client_name as needed.
   def start() do
     IO.puts("=== GiocciClient starting ===")
     connect_wifi()
@@ -82,32 +85,44 @@ defmodule GiocciClient do
   end
 
   defp run_demo(session) do
-    relay_name = "relay1"
-    client_name = "atomvm_client"
-
-    case register_client(session, relay_name, client_name) do
+    case register_client(session, @relay, @client_name) do
       :ok ->
-        IO.puts("Registered with relay '#{relay_name}' as '#{client_name}'")
-        exec_loop(session, relay_name, client_name, 0)
+        IO.puts("Registered with relay '#{@relay}' as '#{@client_name}'")
+        demo_hello(session)
+        demo_basic_calc(session)
 
       {:error, reason} ->
         IO.puts("register_client failed: #{inspect(reason)}, reconnecting...")
     end
   end
 
-  # Returns :ok on normal exit, :error to signal reconnect.
-  defp exec_loop(session, relay_name, client_name, count) do
-    IO.puts("[#{count}] exec_func Integer.to_string(#{count})...")
+  # --- GiocciExample.hello (mirrors README "Hello, World!!" section) ---
 
-    case exec_func(session, relay_name, client_name, {Integer, :to_string, [count]}) do
+  defp demo_hello(session) do
+    IO.puts("\n-- GiocciExample.hello --")
+    exec_and_print(session, {GiocciExample, :hello, []})
+    exec_and_print(session, {GiocciExample, :hello, ["AtomVM"]})
+  end
+
+  # --- GiocciExample.BasicCalc (mirrors README "Basic Calculation" section) ---
+
+  defp demo_basic_calc(session) do
+    IO.puts("\n-- GiocciExample.BasicCalc --")
+    exec_and_print(session, {GiocciExample.BasicCalc, :add, [3, 4]})
+    exec_and_print(session, {GiocciExample.BasicCalc, :multiply, [3, 4]})
+    exec_and_print(session, {GiocciExample.BasicCalc, :power, [3, 4]})
+    exec_and_print(session, {GiocciExample.BasicCalc, :fib, [10]})
+  end
+
+  defp exec_and_print(session, {m, f, a} = mfargs) do
+    label = "#{inspect(m)}.#{f}(#{Enum.join(Enum.map(a, &inspect/1), ", ")})"
+
+    case exec_func(session, @relay, @client_name, mfargs) do
       {:ok, result} ->
-        IO.puts("  => #{inspect(result)}")
-        Process.sleep(3000)
-        exec_loop(session, relay_name, client_name, count + 1)
+        IO.puts("  #{label} => #{inspect(result)}")
 
       {:error, reason} ->
-        IO.puts("  error: #{inspect(reason)}, reconnecting...")
-        :error
+        IO.puts("  #{label} => ERROR: #{inspect(reason)}")
     end
   end
 
@@ -115,8 +130,6 @@ defmodule GiocciClient do
   # Private helpers
   # ---------------------------------------------------------------------------
 
-  # Send a term via Zenoh GET and decode the reply.
-  # Returns the decoded reply term, or {:error, reason}.
   defp zenoh_get(session, key, term, timeout_ms) do
     payload = :erlang.term_to_binary(term)
 
