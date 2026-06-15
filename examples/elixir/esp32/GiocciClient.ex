@@ -65,7 +65,15 @@ defmodule GiocciClient do
   end
 
   defp open_and_run() do
-    case Zenoh.open(EspConfig.zenoh_router()) do
+    # Zenoh NIFs raise Erlang errors on failure, so catch/rescue is needed.
+    result =
+      try do
+        Zenoh.open(EspConfig.zenoh_router())
+      catch
+        :error, reason -> {:error, reason}
+      end
+
+    case result do
       {:ok, session} ->
         IO.puts("Zenoh session open!")
         run_demo(session)
@@ -91,25 +99,24 @@ defmodule GiocciClient do
         exec_loop(session, relay_name, client_name, 0)
 
       {:error, reason} ->
-        IO.puts("register_client failed: #{inspect(reason)}")
+        IO.puts("register_client failed: #{inspect(reason)}, reconnecting...")
     end
   end
 
+  # Returns :ok on normal exit, :error to signal reconnect.
   defp exec_loop(session, relay_name, client_name, count) do
     IO.puts("[#{count}] exec_func Integer.to_string(#{count})...")
 
     case exec_func(session, relay_name, client_name, {Integer, :to_string, [count]}) do
       {:ok, result} ->
         IO.puts("  => #{inspect(result)}")
+        Process.sleep(3000)
+        exec_loop(session, relay_name, client_name, count + 1)
 
       {:error, reason} ->
-        IO.puts("  error: #{inspect(reason)}")
-        # On error, return to trigger reconnect
+        IO.puts("  error: #{inspect(reason)}, reconnecting...")
         :error
     end
-
-    Process.sleep(3000)
-    exec_loop(session, relay_name, client_name, count + 1)
   end
 
   # ---------------------------------------------------------------------------
@@ -117,11 +124,18 @@ defmodule GiocciClient do
   # ---------------------------------------------------------------------------
 
   # Send a term via Zenoh GET and decode the reply.
-  # Returns the decoded reply term directly, or {:error, reason}.
+  # Catches Erlang errors raised by the NIF and returns {:error, reason}.
   defp zenoh_get(session, key, term, timeout_ms) do
     payload = :erlang.term_to_binary(term)
 
-    case Zenoh.get(session, key, payload, timeout_ms) do
+    result =
+      try do
+        Zenoh.get(session, key, payload, timeout_ms)
+      catch
+        :error, reason -> {:error, reason}
+      end
+
+    case result do
       {:ok, reply_bin} -> :erlang.binary_to_term(reply_bin)
       :timeout -> {:error, :timeout}
       error -> error
