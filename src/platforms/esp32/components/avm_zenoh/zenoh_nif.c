@@ -46,6 +46,12 @@ typedef struct {
     bool is_valid;
 } ZenohSubscriberResource;
 
+typedef struct {
+    uint8_t payload[ZENOH_PAYLOAD_MAX];
+    size_t payload_len;
+    bool has_error;
+} ZenohGetReply;
+
 static ErlNifResourceType *zenoh_session_resource_type;
 static ErlNifResourceType *zenoh_publisher_resource_type;
 static ErlNifResourceType *zenoh_subscriber_resource_type;
@@ -481,6 +487,133 @@ static term nif_zenoh_subscriber_recv(Context *ctx, int argc, term argv[])
     return result;
 }
 
+static void zenoh_get_reply_callback(z_loaned_reply_t *reply, void *arg)
+{
+    QueueHandle_t queue = (QueueHandle_t) arg;
+
+    ZenohGetReply *msg = malloc(sizeof(ZenohGetReply));
+    if (msg == NULL) {
+        return;
+    }
+    memset(msg, 0, sizeof(ZenohGetReply));
+
+    if (z_reply_is_ok(reply)) {
+        const z_loaned_sample_t *sample = z_reply_ok(reply);
+        z_owned_string_t payload_str;
+        z_bytes_to_string(z_sample_payload(sample), &payload_str);
+        size_t len = z_string_len(z_loan(payload_str));
+        if (len > ZENOH_PAYLOAD_MAX) {
+            len = ZENOH_PAYLOAD_MAX;
+        }
+        memcpy(msg->payload, z_string_data(z_loan(payload_str)), len);
+        msg->payload_len = len;
+        z_drop(z_move(payload_str));
+    } else {
+        msg->has_error = true;
+    }
+
+    xQueueSend(queue, msg, 0);
+    free(msg);
+}
+
+// zenoh:get/4 :: session(), binary(), binary(), integer() -> {ok, binary()} | timeout | {error, atom()}
+// Sends a Zenoh GET with payload and waits for one reply within timeout_ms (-1 = block forever).
+static term nif_zenoh_get(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    void *sess_obj = NULL;
+    if (UNLIKELY(!enif_get_resource(erl_nif_env_from_context(ctx), argv[0], zenoh_session_resource_type, &sess_obj))) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    ZenohSessionResource *sess = (ZenohSessionResource *) sess_obj;
+    if (!sess->is_open) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+
+    VALIDATE_VALUE(argv[1], term_is_binary);
+    VALIDATE_VALUE(argv[2], term_is_binary);
+    VALIDATE_VALUE(argv[3], term_is_integer);
+
+    char *keyexpr_str = interop_binary_to_string(argv[1]);
+    if (IS_NULL_PTR(keyexpr_str)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    z_view_keyexpr_t ke;
+    if (z_view_keyexpr_from_str(&ke, keyexpr_str) < 0) {
+        free(keyexpr_str);
+        RAISE_ERROR(BADARG_ATOM);
+    }
+
+    size_t payload_len = term_binary_size(argv[2]);
+    const uint8_t *payload_data = (const uint8_t *) term_binary_data(argv[2]);
+
+    int32_t timeout_ms = term_to_int32(argv[3]);
+
+    QueueHandle_t queue = xQueueCreate(ZENOH_QUEUE_DEPTH, sizeof(ZenohGetReply));
+    if (queue == NULL) {
+        free(keyexpr_str);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    z_owned_bytes_t req_payload;
+    z_bytes_copy_from_buf(&req_payload, payload_data, payload_len);
+
+    z_get_options_t opts;
+    z_get_options_default(&opts);
+    opts.payload = z_move(req_payload);
+    if (timeout_ms > 0) {
+        opts.timeout_ms = (uint64_t) timeout_ms;
+    }
+
+    z_owned_closure_reply_t callback;
+    z_closure(&callback, zenoh_get_reply_callback, NULL, (void *) queue);
+
+    int rc = z_get(z_loan(sess->session), z_loan(ke), "", z_move(callback), &opts);
+    free(keyexpr_str);
+
+    if (rc < 0) {
+        vQueueDelete(queue);
+        RAISE_ERROR(globalcontext_make_atom(ctx->global, ATOM_STR("\xB", "zenoh_error")));
+    }
+
+    TickType_t ticks = (timeout_ms < 0) ? portMAX_DELAY : pdMS_TO_TICKS((uint32_t) timeout_ms);
+
+    ZenohGetReply *msg = malloc(sizeof(ZenohGetReply));
+    if (IS_NULL_PTR(msg)) {
+        vQueueDelete(queue);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    if (xQueueReceive(queue, msg, ticks) != pdTRUE) {
+        free(msg);
+        vQueueDelete(queue);
+        return globalcontext_make_atom(ctx->global, ATOM_STR("\x7", "timeout"));
+    }
+    vQueueDelete(queue);
+
+    if (msg->has_error) {
+        free(msg);
+        RAISE_ERROR(globalcontext_make_atom(ctx->global, ATOM_STR("\xB", "zenoh_error")));
+    }
+
+    size_t reply_len = msg->payload_len;
+
+    size_t heap_needed = TUPLE_SIZE(2) + term_binary_heap_size(reply_len);
+    if (UNLIKELY(memory_ensure_free(ctx, heap_needed) != MEMORY_GC_OK)) {
+        free(msg);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    term reply_bin = term_from_literal_binary(msg->payload, reply_len, &ctx->heap, ctx->global);
+    free(msg);
+
+    term result = term_alloc_tuple(2, &ctx->heap);
+    term_put_tuple_element(result, 0, OK_ATOM);
+    term_put_tuple_element(result, 1, reply_bin);
+    return result;
+}
+
 // zenoh:undeclare_subscriber/1 :: subscriber() -> ok
 static term nif_zenoh_undeclare_subscriber(Context *ctx, int argc, term argv[])
 {
@@ -506,6 +639,7 @@ static const struct Nif zenoh_undeclare_publisher_nif = { .base.type = NIFFuncti
 static const struct Nif zenoh_declare_subscriber_nif = { .base.type = NIFFunctionType, .nif_ptr = nif_zenoh_declare_subscriber };
 static const struct Nif zenoh_subscriber_recv_nif = { .base.type = NIFFunctionType, .nif_ptr = nif_zenoh_subscriber_recv };
 static const struct Nif zenoh_undeclare_subscriber_nif = { .base.type = NIFFunctionType, .nif_ptr = nif_zenoh_undeclare_subscriber };
+static const struct Nif zenoh_get_nif = { .base.type = NIFFunctionType, .nif_ptr = nif_zenoh_get };
 
 static const struct Nif *zenoh_nif_get_nif(const char *nifname)
 {
@@ -518,6 +652,7 @@ static const struct Nif *zenoh_nif_get_nif(const char *nifname)
     if (strcmp("zenoh:declare_subscriber/2", nifname) == 0) return &zenoh_declare_subscriber_nif;
     if (strcmp("zenoh:subscriber_recv/2", nifname) == 0) return &zenoh_subscriber_recv_nif;
     if (strcmp("zenoh:undeclare_subscriber/1", nifname) == 0) return &zenoh_undeclare_subscriber_nif;
+    if (strcmp("zenoh:get/4", nifname) == 0) return &zenoh_get_nif;
     return NULL;
 }
 
