@@ -2,27 +2,56 @@ defmodule ZenohPub do
   @compile {:no_warn_undefined, [Zenoh, :network, EspConfig]}
 
   @keyexpr "atomvm/example/pub"
+  @reconnect_delay_ms 5000
 
   def start() do
     IO.puts("=== ZenohPub starting ===")
     connect_wifi()
     IO.puts("WiFi connected, opening Zenoh session...")
-
-    {:ok, session} = Zenoh.open(EspConfig.zenoh_router())
-    IO.puts("Zenoh session open!")
-
-    {:ok, pub} = Zenoh.declare_publisher(session, @keyexpr)
-    IO.puts("Publisher declared on #{@keyexpr}")
-
-    loop(session, pub, 0)
+    open_and_loop(0)
   end
 
-  defp loop(session, pub, count) do
+  defp open_and_loop(count) do
+    case Zenoh.open(EspConfig.zenoh_router()) do
+      {:ok, session} ->
+        IO.puts("Zenoh session open!")
+        case Zenoh.declare_publisher(session, @keyexpr) do
+          {:ok, pub} ->
+            IO.puts("Publisher declared on #{@keyexpr}")
+            count = publish_loop(session, pub, count)
+            Zenoh.undeclare_publisher(pub)
+            Zenoh.close(session)
+            IO.puts("Reconnecting in #{@reconnect_delay_ms}ms...")
+            Process.sleep(@reconnect_delay_ms)
+            open_and_loop(count)
+
+          {:error, reason} ->
+            IO.puts("declare_publisher failed: #{inspect(reason)}, retrying...")
+            Zenoh.close(session)
+            Process.sleep(@reconnect_delay_ms)
+            open_and_loop(count)
+        end
+
+      {:error, reason} ->
+        IO.puts("Zenoh open failed: #{inspect(reason)}, retrying...")
+        Process.sleep(@reconnect_delay_ms)
+        open_and_loop(count)
+    end
+  end
+
+  # Returns the next count when a publish error is detected.
+  defp publish_loop(session, pub, count) do
     payload = "AtomVM count=#{count}"
     IO.puts("[#{count}] Publishing: #{payload}")
-    Zenoh.publisher_put(pub, payload)
-    Process.sleep(1000)
-    loop(session, pub, count + 1)
+    case Zenoh.publisher_put(pub, payload) do
+      :ok ->
+        Process.sleep(1000)
+        publish_loop(session, pub, count + 1)
+
+      {:error, reason} ->
+        IO.puts("Publish error: #{inspect(reason)}, will reconnect")
+        count + 1
+    end
   end
 
   defp connect_wifi() do

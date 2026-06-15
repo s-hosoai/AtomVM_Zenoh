@@ -9,38 +9,60 @@ if (NOT EXISTS "${ZENOH_PICO_DIR}/include/zenoh-pico.h")
         "Run: git submodule update --init src/platforms/esp32/third_party/zenoh-pico")
 endif()
 
-# Core zenoh-pico sources (platform-agnostic)
+# Generate config.h from config.h.in (not shipped in the source tree).
+# ZP_SYSTEM_PLATFORM_HEADER is left unset so the #cmakedefine becomes /* #undef */.
+# The ZENOH_GENERIC compile definition makes the generated #else block unreachable,
+# so the unresolved @VAR@ tokens in that branch do not matter.
+configure_file(
+    "${ZENOH_PICO_DIR}/include/zenoh-pico/config.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/zenoh_pico_include/zenoh-pico/config.h"
+    @ONLY
+)
+
+# Core zenoh-pico sources (platform-agnostic), mirroring zenoh-pico's own CMakeLists.txt.
 file(GLOB_RECURSE ZENOH_CORE_SRCS
     "${ZENOH_PICO_DIR}/src/api/*.c"
     "${ZENOH_PICO_DIR}/src/collections/*.c"
-    "${ZENOH_PICO_DIR}/src/link/*.c"
     "${ZENOH_PICO_DIR}/src/net/*.c"
     "${ZENOH_PICO_DIR}/src/protocol/*.c"
     "${ZENOH_PICO_DIR}/src/runtime/*.c"
     "${ZENOH_PICO_DIR}/src/session/*.c"
     "${ZENOH_PICO_DIR}/src/transport/*.c"
     "${ZENOH_PICO_DIR}/src/utils/*.c"
+    "${ZENOH_PICO_DIR}/src/system/common/*.c"
 )
 
-# Exclude most raweth transport files (requires raw ethernet hardware).
-# transport/raweth/link.c is kept because it provides stub implementations of
-# _z_endpoint_raweth_valid, _z_new_link_raweth, _z_raweth_config_from_strn, etc.
-# that endpoint.c and link.c call unconditionally regardless of Z_FEATURE_RAWETH_TRANSPORT.
+# Link layer: use non-recursive GLOB to avoid pulling in platform-specific transport files.
+file(GLOB ZENOH_LINK_SRCS
+    "${ZENOH_PICO_DIR}/src/link/config/*.c"
+    "${ZENOH_PICO_DIR}/src/link/multicast/*.c"
+    "${ZENOH_PICO_DIR}/src/link/unicast/*.c"
+    "${ZENOH_PICO_DIR}/src/link/transport/common/*.c"
+)
+list(APPEND ZENOH_CORE_SRCS ${ZENOH_LINK_SRCS})
+list(APPEND ZENOH_CORE_SRCS
+    "${ZENOH_PICO_DIR}/src/link/link.c"
+    "${ZENOH_PICO_DIR}/src/link/endpoint.c"
+    "${ZENOH_PICO_DIR}/src/link/transport/tcp/address.c"
+    "${ZENOH_PICO_DIR}/src/link/transport/udp/address.c"
+    "${ZENOH_PICO_DIR}/src/link/transport/upper/serial_protocol.c"
+    "${ZENOH_PICO_DIR}/src/link/transport/upper/tls_stream.c"
+)
+
 # Exclude raweth transport (requires raw Ethernet hardware).
-# transport/raweth/link.c is kept because it has a proper #else stub block for the
-# _z_endpoint_raweth_valid / _z_new_link_raweth / _z_raweth_config_from_strn symbols.
-# For _z_raweth_send_* (tx.c has no #else block), raweth_stubs.c provides the stubs.
+# transport/raweth/link.c is kept because it provides stubs for
+# _z_endpoint_raweth_valid, _z_new_link_raweth, _z_raweth_config_from_strn.
+# raweth_stubs.c provides stubs for tx.c functions that have no #else block.
 list(FILTER ZENOH_CORE_SRCS EXCLUDE REGEX ".*/raweth/.*")
 list(APPEND ZENOH_CORE_SRCS "${ZENOH_PICO_DIR}/src/transport/raweth/link.c")
 
-# ESP-IDF system backend (uses esp_random, esp_heap_caps, LwIP sockets).
-# freertos/system.c is incompatible with ESP-IDF's SMP FreeRTOS (taskENTER_CRITICAL
-# requires a spinlock argument in ESP-IDF Xtensa port).
+# ESP-IDF system backend (uses esp_random, LwIP sockets, ESP-IDF UART).
 set(ZENOH_SYS_SRCS
     "${ZENOH_PICO_DIR}/src/system/espidf/system.c"
-    "${ZENOH_PICO_DIR}/src/system/espidf/network.c"
-    "${ZENOH_PICO_DIR}/src/system/common/platform.c"
-    "${ZENOH_PICO_DIR}/src/system/common/serial.c"
+    "${ZENOH_PICO_DIR}/src/system/socket/esp32.c"
+    "${ZENOH_PICO_DIR}/src/link/transport/tcp/tcp_esp32.c"
+    "${ZENOH_PICO_DIR}/src/link/transport/udp/udp_esp32.c"
+    "${ZENOH_PICO_DIR}/src/link/transport/serial/uart_espidf.c"
 )
 
 if (IDF_VERSION_MAJOR GREATER_EQUAL 5)
@@ -51,7 +73,7 @@ endif()
 
 idf_component_register(
     SRCS "zenoh_nif.c" "raweth_stubs.c" ${ZENOH_CORE_SRCS} ${ZENOH_SYS_SRCS}
-    INCLUDE_DIRS "${ZENOH_PICO_DIR}/include" "${COMPONENT_DIR}/zenoh_config"
+    INCLUDE_DIRS "${ZENOH_PICO_DIR}/include" "${COMPONENT_DIR}/zenoh_config" "${CMAKE_CURRENT_BINARY_DIR}/zenoh_pico_include"
     PRIV_REQUIRES "libatomvm" "avm_sys" "esp_system" "driver" "lwip"
     ${OPTIONAL_WHOLE_ARCHIVE}
 )
