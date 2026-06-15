@@ -49,7 +49,7 @@ add_custom_command(
     VERBATIM
 )
 
-foreach(_zenoh_mod ZenohPub ZenohSub)
+foreach(_zenoh_mod ZenohPub ZenohSub GiocciClient)
     add_custom_command(
         OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/Elixir.${_zenoh_mod}.beam
         COMMAND elixirc -o ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/${_zenoh_mod}.ex
