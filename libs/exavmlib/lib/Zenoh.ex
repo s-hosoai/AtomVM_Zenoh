@@ -46,4 +46,14 @@ defmodule Zenoh do
 
   @doc "Undeclare a subscriber."
   def undeclare_subscriber(subscriber), do: :zenoh.undeclare_subscriber(subscriber)
+
+  @doc """
+  Send a Zenoh GET (queryable request-response).
+  Returns {:ok, reply_payload} | :timeout | {:error, reason}.
+  timeout_ms: -1 blocks forever, >0 = wait up to N ms.
+  """
+  def get(session, keyexpr, payload, timeout_ms \\ 5000)
+      when is_binary(keyexpr) and is_binary(payload) and is_integer(timeout_ms) do
+    :zenoh.get(session, keyexpr, payload, timeout_ms)
+  end
 end

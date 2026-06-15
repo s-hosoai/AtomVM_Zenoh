@@ -73,3 +73,48 @@ foreach(_zenoh_mod ZenohPub ZenohSub)
     )
     add_custom_target(${_zenoh_mod} ALL DEPENDS ${_zenoh_mod}.avm)
 endforeach()
+
+# ---- GiocciClient (two-stage: compile example first, then embed its BEAM) ----
+#
+# Stage 1: compile GiocciClientExample.ex → Elixir.GiocciClientExample.beam
+# This BEAM file is NOT packed into the AVM; its bytes are embedded as a literal
+# inside GiocciClient.beam and sent to the engine at runtime via save_module.
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/Elixir.GiocciClientExample.beam
+    COMMAND elixirc -o ${CMAKE_CURRENT_BINARY_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/GiocciClientExample.ex
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/GiocciClientExample.ex
+    COMMENT "Compiling GiocciClientExample.ex"
+    VERBATIM
+)
+
+# Stage 2: compile GiocciClient.ex with GIOCCI_EXAMPLE_BEAM_DIR pointing to the
+# binary dir so that File.read!("Elixir.GiocciClientExample.beam") succeeds.
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/Elixir.GiocciClient.beam
+    COMMAND ${CMAKE_COMMAND} -E env
+            GIOCCI_EXAMPLE_BEAM_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            elixirc -o ${CMAKE_CURRENT_BINARY_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/GiocciClient.ex
+    DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/GiocciClient.ex
+        ${CMAKE_CURRENT_BINARY_DIR}/Elixir.GiocciClientExample.beam
+    COMMENT "Compiling GiocciClient.ex (embeds GiocciClientExample.beam)"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT GiocciClient.avm
+    DEPENDS
+        ${CMAKE_CURRENT_BINARY_DIR}/Elixir.GiocciClient.beam
+        ${CMAKE_CURRENT_BINARY_DIR}/Elixir.EspConfig.beam
+        PackBEAM estdlib eavmlib exavmlib avm_esp32
+    COMMAND ${CMAKE_BINARY_DIR}/tools/packbeam/packbeam create
+            -s Elixir.GiocciClient GiocciClient.avm
+            ${CMAKE_CURRENT_BINARY_DIR}/Elixir.GiocciClient.beam
+            ${CMAKE_CURRENT_BINARY_DIR}/Elixir.EspConfig.beam
+            ${_zenoh_archives}
+    COMMENT "Packing GiocciClient.avm"
+    VERBATIM
+)
+add_custom_target(GiocciClient ALL DEPENDS GiocciClient.avm)
