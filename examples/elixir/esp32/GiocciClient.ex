@@ -4,18 +4,37 @@ defmodule GiocciClient do
   # Giocci client port for AtomVM (ESP32).
   # Mirrors giocci_example (https://github.com/biyooon-ex/giocci_example).
   #
-  # Supported: register_client/4, exec_func/5
+  # Supported: register_client/4, exec_func/5, save_module/6
   # Not supported on AtomVM (use PC-side Giocci client instead):
-  #   - save_module     — requires :code.get_object_code/1
   #   - exec_func_async — requires Task.Supervisor
   #   - HeavyLoad       — requires Task.async_stream
   #   - Measurer        — requires System.monotonic_time
   #   - AsyncServer     — requires GenServer + exec_func_async
+  #
+  # GiocciClientExample.beam is pre-compiled on the build host and embedded here
+  # as a binary literal. At runtime the ESP32 sends it to the engine via save_module.
 
   @relay "giocci_relay"
   @client_name "atomvm_client"
-  @default_timeout 5000
+  @default_timeout 10000
   @reconnect_delay_ms 5000
+
+  # Embed GiocciClientExample.beam at compile time, wrapped in term_to_binary so that
+  # the literal stored in the LitT chunk does NOT start with the BEAM magic bytes
+  # (FOR1...BEAM). PackBEAM's get_atom_literals iterates LitT via binary_to_term and
+  # an unwrapped raw BEAM binary can cause {invalid_chunk, <<FOR1...>>} crashes.
+  # GIOCCI_EXAMPLE_BEAM_DIR must point to the directory containing the compiled .beam.
+  # (cmake sets this automatically via `cmake -E env`.)
+  @giocci_example_beam_etf :erlang.term_to_binary(
+    File.read!(
+      Path.join(
+        System.get_env("GIOCCI_EXAMPLE_BEAM_DIR") ||
+          raise("GIOCCI_EXAMPLE_BEAM_DIR not set — run via cmake or set manually"),
+        "Elixir.GiocciClientExample.beam"
+      )
+    )
+  )
+  defp giocci_example_beam, do: :erlang.binary_to_term(@giocci_example_beam_etf)
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -34,9 +53,35 @@ defmodule GiocciClient do
     end
   end
 
+  # Upload a pre-compiled Elixir module's BEAM binary to the engine via the relay.
+  # module_atom:  the module atom (e.g. GiocciClientExample)
+  # beam_binary:  raw BEAM binary (use @giocci_example_beam or File.read!/1)
+  # Returns :ok | {:error, reason}
+  def save_module(session, relay_name, client_name, module_atom, beam_binary, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
+    key = "giocci/save_module/client/" <> relay_name
+    # module_object_code mirrors :code.get_object_code/1 return format:
+    #   {module_atom, beam_binary, filename}
+    # The engine passes this to :code.load_binary/3. Using the atom as filename
+    # satisfies file:filename() :: string() | atom().
+    module_object_code = {module_atom, beam_binary, module_atom}
+    term = %{
+      data: %{
+        module_object_code: module_object_code,
+        timeout: timeout,
+        client_name: client_name
+      },
+      measurements: %{}
+    }
+
+    case zenoh_get(session, key, term, timeout) do
+      {:ok, _} -> :ok
+      error -> error
+    end
+  end
+
   # Execute a function on a Giocci engine via the relay.
   # mfargs: {Module, :function, [arg1, arg2, ...]}
-  # Module must already be uploaded by a PC-side Giocci client via save_module.
   # Returns {:ok, result} | {:error, reason}
   def exec_func(session, relay_name, client_name, mfargs, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @default_timeout)
@@ -90,6 +135,7 @@ defmodule GiocciClient do
         IO.puts("Registered with relay '#{@relay}' as '#{@client_name}'")
         demo_hello(session)
         demo_basic_calc(session)
+        demo_save_module(session)
 
       {:error, reason} ->
         IO.puts("register_client failed: #{inspect(reason)}, reconnecting...")
@@ -112,6 +158,25 @@ defmodule GiocciClient do
     exec_and_print(session, {GiocciExample.BasicCalc, :multiply, [3, 4]})
     exec_and_print(session, {GiocciExample.BasicCalc, :power, [3, 4]})
     exec_and_print(session, {GiocciExample.BasicCalc, :fib, [10]})
+  end
+
+  # --- save_module + GiocciClientExample (ESP32-defined module sent to engine) ---
+
+  defp demo_save_module(session) do
+    IO.puts("\n-- save_module + GiocciClientExample --")
+
+    case save_module(session, @relay, @client_name, GiocciClientExample, giocci_example_beam()) do
+      :ok ->
+        IO.puts("  GiocciClientExample saved to engine!")
+        exec_and_print(session, {GiocciClientExample, :hello, []})
+        exec_and_print(session, {GiocciClientExample, :hello, ["Giocci"]})
+        exec_and_print(session, {GiocciClientExample, :add, [10, 32]})
+        exec_and_print(session, {GiocciClientExample, :fib, [8]})
+        exec_and_print(session, {GiocciClientExample, :celsius_to_fahrenheit, [25]})
+
+      {:error, reason} ->
+        IO.puts("  save_module failed: #{inspect(reason)}")
+    end
   end
 
   defp exec_and_print(session, {m, f, a} = mfargs) do
