@@ -52,6 +52,21 @@ typedef struct {
     bool has_error;
 } ZenohGetReply;
 
+// Build and return {error, reason} from a NIF. Keeps RAISE_ERROR only for OOM.
+#define NIF_RETURN_ERROR(reason_atom)                                               \
+    do {                                                                            \
+        term _reason = (reason_atom);                                               \
+        if (UNLIKELY(memory_ensure_free(ctx, TUPLE_SIZE(2)) != MEMORY_GC_OK)) {    \
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);                                        \
+        }                                                                           \
+        term _err = term_alloc_tuple(2, &ctx->heap);                               \
+        term_put_tuple_element(_err, 0, ERROR_ATOM);                               \
+        term_put_tuple_element(_err, 1, _reason);                                  \
+        return _err;                                                                \
+    } while (0)
+
+#define ZENOH_ERROR_ATOM globalcontext_make_atom(ctx->global, ATOM_STR("\xB", "zenoh_error"))
+
 static ErlNifResourceType *zenoh_session_resource_type;
 static ErlNifResourceType *zenoh_publisher_resource_type;
 static ErlNifResourceType *zenoh_subscriber_resource_type;
@@ -186,7 +201,7 @@ static term nif_zenoh_open(Context *ctx, int argc, term argv[])
 
     if (z_open(&res->session, z_move(config), NULL) < 0) {
         enif_release_resource(res);
-        RAISE_ERROR(globalcontext_make_atom(ctx->global, ATOM_STR("\xB", "zenoh_error")));
+        NIF_RETURN_ERROR(ZENOH_ERROR_ATOM);
     }
     zp_start_read_task(z_loan_mut(res->session), NULL);
     zp_start_lease_task(z_loan_mut(res->session), NULL);
@@ -264,7 +279,7 @@ static term nif_zenoh_put(Context *ctx, int argc, term argv[])
     free(keyexpr_str);
 
     if (rc < 0) {
-        RAISE_ERROR(globalcontext_make_atom(ctx->global, ATOM_STR("\xB", "zenoh_error")));
+        NIF_RETURN_ERROR(ZENOH_ERROR_ATOM);
     }
     return OK_ATOM;
 }
@@ -305,7 +320,7 @@ static term nif_zenoh_declare_publisher(Context *ctx, int argc, term argv[])
     if (z_declare_publisher(z_loan(sess->session), &res->publisher, z_loan(ke), NULL) < 0) {
         free(keyexpr_str);
         enif_release_resource(res);
-        RAISE_ERROR(globalcontext_make_atom(ctx->global, ATOM_STR("\xB", "zenoh_error")));
+        NIF_RETURN_ERROR(ZENOH_ERROR_ATOM);
     }
     free(keyexpr_str);
     res->is_valid = true;
@@ -348,7 +363,7 @@ static term nif_zenoh_publisher_put(Context *ctx, int argc, term argv[])
     z_bytes_copy_from_buf(&payload, payload_data, payload_len);
 
     if (z_publisher_put(z_loan(res->publisher), z_move(payload), NULL) < 0) {
-        RAISE_ERROR(globalcontext_make_atom(ctx->global, ATOM_STR("\xB", "zenoh_error")));
+        NIF_RETURN_ERROR(ZENOH_ERROR_ATOM);
     }
     return OK_ATOM;
 }
@@ -417,7 +432,7 @@ static term nif_zenoh_declare_subscriber(Context *ctx, int argc, term argv[])
         free(keyexpr_str);
         vQueueDelete(queue);
         enif_release_resource(res);
-        RAISE_ERROR(globalcontext_make_atom(ctx->global, ATOM_STR("\xB", "zenoh_error")));
+        NIF_RETURN_ERROR(ZENOH_ERROR_ATOM);
     }
     free(keyexpr_str);
     res->is_valid = true;
@@ -574,7 +589,7 @@ static term nif_zenoh_get(Context *ctx, int argc, term argv[])
 
     if (rc < 0) {
         vQueueDelete(queue);
-        RAISE_ERROR(globalcontext_make_atom(ctx->global, ATOM_STR("\xB", "zenoh_error")));
+        NIF_RETURN_ERROR(ZENOH_ERROR_ATOM);
     }
 
     TickType_t ticks = (timeout_ms < 0) ? portMAX_DELAY : pdMS_TO_TICKS((uint32_t) timeout_ms);
@@ -594,7 +609,7 @@ static term nif_zenoh_get(Context *ctx, int argc, term argv[])
 
     if (msg->has_error) {
         free(msg);
-        RAISE_ERROR(globalcontext_make_atom(ctx->global, ATOM_STR("\xB", "zenoh_error")));
+        NIF_RETURN_ERROR(ZENOH_ERROR_ATOM);
     }
 
     size_t reply_len = msg->payload_len;

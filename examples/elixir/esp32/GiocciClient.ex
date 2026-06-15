@@ -65,15 +65,7 @@ defmodule GiocciClient do
   end
 
   defp open_and_run() do
-    # Zenoh NIFs raise Erlang errors on failure, so catch/rescue is needed.
-    result =
-      try do
-        Zenoh.open(EspConfig.zenoh_router())
-      catch
-        :error, reason -> {:error, reason}
-      end
-
-    case result do
+    case Zenoh.open(EspConfig.zenoh_router()) do
       {:ok, session} ->
         IO.puts("Zenoh session open!")
         run_demo(session)
@@ -124,18 +116,11 @@ defmodule GiocciClient do
   # ---------------------------------------------------------------------------
 
   # Send a term via Zenoh GET and decode the reply.
-  # Catches Erlang errors raised by the NIF and returns {:error, reason}.
+  # Returns the decoded reply term, or {:error, reason}.
   defp zenoh_get(session, key, term, timeout_ms) do
     payload = :erlang.term_to_binary(term)
 
-    result =
-      try do
-        Zenoh.get(session, key, payload, timeout_ms)
-      catch
-        :error, reason -> {:error, reason}
-      end
-
-    case result do
+    case Zenoh.get(session, key, payload, timeout_ms) do
       {:ok, reply_bin} -> :erlang.binary_to_term(reply_bin)
       :timeout -> {:error, :timeout}
       error -> error
